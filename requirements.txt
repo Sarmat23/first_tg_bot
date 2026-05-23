@@ -1,9 +1,2 @@
-aiogram==3.13.1
+pyTelegramBotAPI
 google-generativeai
-python-dotenv
-aiofiles
-PyPDF2
-python-docx
-pandas
-openpyxl
-Pillow
