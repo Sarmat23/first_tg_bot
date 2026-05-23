@@ -1,7 +1,5 @@
 import google.generativeai as genai
-
 from config import GEMINI_API_KEY
-
 
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -25,11 +23,8 @@ model = genai.GenerativeModel(
     )
 )
 
-
+# Функция должна правильно использовать await
 async def ask_gemini(prompt: str):
-
-    response = model.generate_content(
-        prompt
-    )
-
+    # Используем асинхронный метод generate_content_async вместо синхронного
+    response = await model.generate_content_async(prompt)
     return response.text
