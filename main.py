@@ -8,10 +8,7 @@ import pandas as pd
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
-from aiogram.types import (
-    Message,
-    FSInputFile
-)
+from aiogram.types import Message
 
 from PyPDF2 import PdfReader
 from docx import Document
@@ -22,12 +19,12 @@ from config import (
     TEMP_DIR
 )
 
-from services.openai_service import ask_gpt
+from services.gemini_service import ask_gemini
 
 
-# ===================================
+# ====================================
 # ЛОГИ
-# ===================================
+# ====================================
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,52 +34,51 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ===================================
-# СОЗДАНИЕ ПАПОК
-# ===================================
+# ====================================
+# ПАПКИ
+# ====================================
 
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 
-# ===================================
+# ====================================
 # BOT
-# ===================================
+# ====================================
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
-# память диалогов
+# память диалога
 dialog_memory = {}
 
 
-# ===================================
-# СТАРТ
-# ===================================
+# ====================================
+# START
+# ====================================
 
 @dp.message(CommandStart())
 async def start(message: Message):
 
     text = (
-        "🤖 AI бот запущен\n\n"
+        "🤖 Gemini AI Bot\n\n"
         "Поддерживается:\n"
-        "- текст\n"
-        "- фото\n"
-        "- pdf\n"
-        "- docx\n"
-        "- txt\n"
-        "- csv\n"
-        "- xlsx\n"
-        "- voice\n"
-        "- audio\n"
-        "- видео\n"
+        "• текст\n"
+        "• txt\n"
+        "• pdf\n"
+        "• docx\n"
+        "• csv\n"
+        "• xlsx\n"
+        "• json\n"
+        "• фото\n\n"
+        "Просто отправь сообщение."
     )
 
     await message.answer(text)
 
 
-# ===================================
-# ОБРАБОТКА ТЕКСТА
-# ===================================
+# ====================================
+# TEXT
+# ====================================
 
 @dp.message(F.text)
 async def handle_text(message: Message):
@@ -99,70 +95,70 @@ async def handle_text(message: Message):
         history = dialog_memory.get(user_id, [])
 
         history.append(
-            {
-                "role": "user",
-                "content": message.text
-            }
+            f"Пользователь: {message.text}"
         )
 
-        prompt = "\n".join(
-            [f"{x['role']}: {x['content']}" for x in history]
-        )
+        prompt = "\n".join(history[-10:])
 
-        answer = await ask_gpt(prompt)
+        answer = await ask_gemini(prompt)
 
         history.append(
-            {
-                "role": "assistant",
-                "content": answer
-            }
+            f"AI: {answer}"
         )
 
-        dialog_memory[user_id] = history[-10:]
+        dialog_memory[user_id] = history
 
-        await message.answer(answer)
+        # защита Telegram лимита
+        if len(answer) > 4000:
+
+            for i in range(0, len(answer), 4000):
+
+                await message.answer(
+                    answer[i:i + 4000]
+                )
+
+        else:
+
+            await message.answer(answer)
 
     except Exception as e:
 
         logger.error(traceback.format_exc())
 
-        await message.answer(
-            f"❌ Ошибка:\n{str(e)}"
-        )
+        error_text = str(e)
+
+        if "429" in error_text:
+
+            await message.answer(
+                "⏳ Превышен лимит запросов."
+            )
+
+        elif "API_KEY" in error_text:
+
+            await message.answer(
+                "❌ Ошибка API ключа Gemini."
+            )
+
+        else:
+
+            await message.answer(
+                f"❌ Ошибка:\n{error_text}"
+            )
 
 
-# ===================================
-# ФОТО
-# ===================================
+# ====================================
+# PHOTO
+# ====================================
 
 @dp.message(F.photo)
 async def handle_photo(message: Message):
 
     try:
 
-        photo = message.photo[-1]
-
-        file = await bot.get_file(photo.file_id)
-
-        file_path = file.file_path
-
-        save_path = os.path.join(
-            TEMP_DIR,
-            f"{photo.file_id}.jpg"
+        await message.answer(
+            "🖼 Анализ фото можно "
+            "добавить через Gemini Vision API."
         )
-
-        await bot.download_file(
-            file_path,
-            save_path
-        )
-
-        answer = await ask_gpt(
-            "Пользователь отправил изображение. "
-            "Сообщи, что обработка изображений "
-            "может быть добавлена через Vision API."
-        )
-
-        await message.answer(answer)
 
     except Exception as e:
 
@@ -171,9 +167,9 @@ async def handle_photo(message: Message):
         await message.answer(str(e))
 
 
-# ===================================
+# ====================================
 # DOCUMENTS
-# ===================================
+# ====================================
 
 @dp.message(F.document)
 async def handle_document(message: Message):
@@ -191,7 +187,9 @@ async def handle_document(message: Message):
             )
             return
 
-        file = await bot.get_file(document.file_id)
+        file = await bot.get_file(
+            document.file_id
+        )
 
         ext = document.file_name.split(".")[-1].lower()
 
@@ -207,9 +205,9 @@ async def handle_document(message: Message):
 
         extracted_text = ""
 
-        # ==========================
+        # =========================
         # TXT
-        # ==========================
+        # =========================
 
         if ext == "txt":
 
@@ -222,20 +220,24 @@ async def handle_document(message: Message):
 
                 extracted_text = await f.read()
 
-        # ==========================
+        # =========================
         # PDF
-        # ==========================
+        # =========================
 
         elif ext == "pdf":
 
             reader = PdfReader(save_path)
 
             for page in reader.pages:
-                extracted_text += page.extract_text()
 
-        # ==========================
+                text = page.extract_text()
+
+                if text:
+                    extracted_text += text
+
+        # =========================
         # DOCX
-        # ==========================
+        # =========================
 
         elif ext == "docx":
 
@@ -245,9 +247,9 @@ async def handle_document(message: Message):
                 [p.text for p in doc.paragraphs]
             )
 
-        # ==========================
+        # =========================
         # CSV
-        # ==========================
+        # =========================
 
         elif ext == "csv":
 
@@ -255,9 +257,9 @@ async def handle_document(message: Message):
 
             extracted_text = df.head(50).to_string()
 
-        # ==========================
+        # =========================
         # XLSX
-        # ==========================
+        # =========================
 
         elif ext == "xlsx":
 
@@ -265,16 +267,17 @@ async def handle_document(message: Message):
 
             extracted_text = df.head(50).to_string()
 
-        # ==========================
+        # =========================
         # JSON
-        # ==========================
+        # =========================
 
         elif ext == "json":
 
             async with aiofiles.open(
                 save_path,
                 "r",
-                encoding="utf-8"
+                encoding="utf-8",
+                errors="ignore"
             ) as f:
 
                 extracted_text = await f.read()
@@ -282,20 +285,37 @@ async def handle_document(message: Message):
         else:
 
             await message.answer(
-                "⚠️ Формат пока не поддерживается"
+                "⚠️ Формат пока не поддерживается."
             )
+
             return
 
         extracted_text = extracted_text[:15000]
 
+        await bot.send_chat_action(
+            message.chat.id,
+            "typing"
+        )
+
         prompt = (
-            "Проанализируй файл:\n\n"
+            "Проанализируй файл "
+            "и кратко объясни содержимое:\n\n"
             f"{extracted_text}"
         )
 
-        answer = await ask_gpt(prompt)
+        answer = await ask_gemini(prompt)
 
-        await message.answer(answer)
+        if len(answer) > 4000:
+
+            for i in range(0, len(answer), 4000):
+
+                await message.answer(
+                    answer[i:i + 4000]
+                )
+
+        else:
+
+            await message.answer(answer)
 
     except Exception as e:
 
@@ -306,60 +326,60 @@ async def handle_document(message: Message):
         )
 
 
-# ===================================
+# ====================================
 # VOICE
-# ===================================
+# ====================================
 
 @dp.message(F.voice)
 async def handle_voice(message: Message):
 
     await message.answer(
-        "🎤 Voice обработка может быть "
-        "добавлена через Whisper API"
+        "🎤 Voice поддержка "
+        "будет добавлена позже."
     )
 
 
-# ===================================
+# ====================================
 # AUDIO
-# ===================================
+# ====================================
 
 @dp.message(F.audio)
 async def handle_audio(message: Message):
 
     await message.answer(
-        "🎵 Audio обработка может быть "
-        "добавлена позже"
+        "🎵 Audio поддержка "
+        "будет добавлена позже."
     )
 
 
-# ===================================
+# ====================================
 # VIDEO
-# ===================================
+# ====================================
 
 @dp.message(F.video)
 async def handle_video(message: Message):
 
     await message.answer(
-        "🎬 Анализ видео можно подключить "
-        "через Vision API"
+        "🎬 Анализ видео "
+        "будет добавлен позже."
     )
 
 
-# ===================================
-# НЕИЗВЕСТНЫЙ ТИП
-# ===================================
+# ====================================
+# UNKNOWN
+# ====================================
 
 @dp.message()
 async def unknown(message: Message):
 
     await message.answer(
-        "⚠️ Неизвестный тип сообщения"
+        "⚠️ Неизвестный тип сообщения."
     )
 
 
-# ===================================
-# ЗАПУСК
-# ===================================
+# ====================================
+# MAIN
+# ====================================
 
 async def main():
 
