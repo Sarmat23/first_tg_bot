@@ -1,9 +1,6 @@
 import telebot
 import google.generativeai as genai
 
-# --- НАСТРОЙКИ ---
-TELEGRAM_TOKEN = 'ВСТАВЬТЕ_СЮДА_ТОКЕН_ОТ_BOTFATHER'
-GEMINI_API_KEY = 'ВСТАВЬТЕ_СЮДА_КЛЮЧ_ОТ_GEMINI'
 
 # Инициализация Telegram бота
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
