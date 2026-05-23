@@ -1,37 +1,38 @@
 import telebot
-import google.generativeai as genai
+from google import genai
+
 
 
 # Инициализация Telegram бота
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# Настройка Gemini
-genai.configure(api_key=GEMINI_API_KEY)
-# Используем актуальную и быструю модель flash или pro
-model = genai.GenerativeModel('gemini-1.5-flash') 
+# Инициализация нового клиента Gemini API
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Обработка команды /start
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "Привет! Я бот, подключенный к Gemini AI. Задай мне любой вопрос!")
+    bot.reply_to(message, "Привет! Я твой ИИ-ассистент на базе актуальной модели Gemini. Задай мне любой вопрос!")
 
-# Обработка всех текстовых сообщений
+# Обработка текстовых сообщений
 @bot.message_handler(func=lambda message: True)
-def echo_all(message):
+def handle_message(message):
     user_text = message.text
-
-    # Отправляем в чат статус, что бот "печатает", пока ИИ думает
+    
+    # Показываем пользователю статус "печатает..."
     bot.send_chat_action(message.chat.id, 'typing')
-
+    
     try:
-        # Отправляем запрос в нейросеть
-        response = model.generate_content(user_text)
-        # Отвечаем пользователю текстом из нейросети
+        # Используем современную быструю модель gemini-2.5-flash
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=user_text,
+        )
         bot.reply_to(message, response.text)
     except Exception as e:
         bot.reply_to(message, f"Произошла ошибка при обращении к Gemini: {e}")
 
-# Запуск бота
+# Запуск
 if __name__ == '__main__':
-    print("Бот запущен...")
+    print("Бот успешно запущен и готов к работе!")
     bot.infinity_polling()
