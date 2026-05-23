@@ -1,0 +1,10 @@
+aiogram==3.13.1
+openai>=1.30.0
+aiofiles
+python-dotenv
+PyPDF2
+python-docx
+pandas
+openpyxl
+pillow
+pydub
