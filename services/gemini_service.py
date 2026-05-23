@@ -6,7 +6,7 @@ from config import GEMINI_API_KEY
 genai.configure(api_key=GEMINI_API_KEY)
 
 model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
+    model_name="gemini-1.5-flash-002",
     system_instruction=(
         "Ты современный Telegram AI ассистент.\n"
         "Отвечай дружелюбно, понятно и структурировано.\n"
