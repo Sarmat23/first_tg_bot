@@ -12,12 +12,12 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
 # Инициализируем Telegram бота
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# Инициализируем Gemini с прокси-сервером для обхода блокировки по IP
+# Используем проверенное публичное зеркало для Gemini
 client = genai.Client(
     api_key=GEMINI_API_KEY,
     http_options={
-        'api_version': 'v1beta', 
-        'base_url': 'https://gateway.ai.cloudflare.com/v1/public/gemini-proxy'
+        'api_version': 'v1beta',
+        'base_url': 'https://api.gemini-proxy.com'
     }
 )
 
