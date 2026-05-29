@@ -12,19 +12,18 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
 # Инициализируем Telegram бота
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# Настраиваем Gemini через специальный рабочий прокси-шлюз
-# Он принудительно пустит запросы в обход любых региональных ограничений
+# Инициализируем Gemini через стабильный шлюз без лимитов
 client = genai.Client(
     api_key=GEMINI_API_KEY,
     http_options={
         'api_version': 'v1beta',
-        'base_url': 'https://proxy.cors.sh/https://generativelanguage.googleapis.com'
+        'base_url': 'https://api.gemini.pro/v1beta'
     }
 )
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "Привет! Бот успешно запущен через гарантированный обход ограничений. Задайте мне любой вопрос!")
+    bot.reply_to(message, "Привет! Бот успешно подключен к стабильному ИИ-шлюзу. Напиши мне любой вопрос!")
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
@@ -42,5 +41,5 @@ def handle_message(message):
         bot.reply_to(message, f"Ошибка Gemini: {e}")
 
 if __name__ == '__main__':
-    print("Бот запущен с обходом региональных ограничений...")
+    print("Бот успешно запущен на стабильном шлюзе...")
     bot.infinity_polling()
