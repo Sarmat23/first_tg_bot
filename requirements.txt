@@ -1,2 +1,4 @@
 pyTelegramBotAPI
 google-genai
+requests[socks]
+pysocks
