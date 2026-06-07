@@ -26,7 +26,7 @@ import aiosqlite
 # ─── Настройки ────────────────────────────────────────────────────────────────
 BOT_TOKEN = "8045514027:AAGhkexJ5AjQcIm95qDA1TQLIkYSd_vS-4s"
 
-CHANNEL_ID = "https://t.me/darom_tkv"          # username или -100xxxxxxxxxx
+CHANNEL_ID = "darom_tkv"          # username или -100xxxxxxxxxx @darom_tkv
 MODERATOR_ID = 310342334               # Telegram ID модератора (число)
 GEMINI_API_KEY = "AQ.Ab8RN6Kn3R2Aw3cbScA1R_2JdFAcekZ-yhyj7-IbVU7PAXRJtw"
 DB_PATH = "darom.db"
