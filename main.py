@@ -23,14 +23,6 @@ from aiogram.exceptions import TelegramBadRequest
 import google.generativeai as genai
 import aiosqlite
  
-# ─── Настройки ────────────────────────────────────────────────────────────────
- 
-BOT_TOKEN = "ВСТАВЬТЕ_ТОКЕН_БОТА_СЮДА"
-GEMINI_API_KEY = "ВСТАВЬТЕ_GEMINI_API_KEY_СЮДА"
-CHANNEL_ID = "@darom_teikovo"          # username или -100xxxxxxxxxx
-MODERATOR_ID = 123456789               # Telegram ID модератора (число)
-DB_PATH = "darom.db"
-AD_LIFETIME_DAYS = 30                  # через сколько дней зачёркивать объявление
 
 # ─── Настройки ────────────────────────────────────────────────────────────────
 BOT_TOKEN = "8045514027:AAGhkexJ5AjQcIm95qDA1TQLIkYSd_vS-4s"
@@ -41,14 +33,15 @@ GEMINI_API_KEY = "AQ.Ab8RN6Kn3R2Aw3cbScA1R_2JdFAcekZ-yhyj7-IbVU7PAXRJtw"
 DB_PATH = "darom.db"
 AD_LIFETIME_DAYS = 30                  # через сколько дней зачёркивать объявление
 
-# ─── Логирование ──────────────────────────────────────────────────────────────
 
+# ─── Логирование ──────────────────────────────────────────────────────────────
+ 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
-
+ 
 # ─── Gemini ───────────────────────────────────────────────────────────────────
  
 genai.configure(api_key=GEMINI_API_KEY)
@@ -525,14 +518,10 @@ async def close_my_ad(callback: CallbackQuery, bot: Bot):
  
     # Зачёркиваем пост в канале
     try:
-        closed_caption = (
-            "🚫 <s>ОБЪЯВЛЕНИЕ ЗАКРЫТО</s>\n\n"
-            + build_ad_text(ad["title"], ad["description"], ad["address"])
-        )
         await bot.edit_message_caption(
             chat_id=CHANNEL_ID,
             message_id=ad["channel_msg_id"],
-            caption=closed_caption,
+            caption=build_closed_caption(ad["title"], ad["description"], ad["address"]),
             parse_mode="HTML"
         )
     except TelegramBadRequest as e:
@@ -613,9 +602,13 @@ def strikethrough(text: str) -> str:
     return "".join(c + "\u0336" for c in text)
  
 def build_closed_caption(title: str, description: str, address: str) -> str:
-    body = build_ad_text(title, description, address)
-    # В Telegram HTML нет <s> в caption, используем зачёркивание символами
-    return "🚫 <s>ОБЪЯВЛЕНИЕ ЗАКРЫТО</s>\n\n" + body
+    return (
+        f"🚫 <s>ОБЪЯВЛЕНИЕ ЗАКРЫТО</s>\n\n"
+        f"<s>📦 {title}</s>\n\n"
+        f"<s>📝 {description}</s>\n\n"
+        f"<s>📍 Адрес: {address}</s>\n\n"
+        f"<s>💬 Пишите в комментариях, если хотите забрать!</s>"
+    )
  
 # ─── Планировщик: закрытие старых объявлений ──────────────────────────────────
  
@@ -627,15 +620,10 @@ async def close_old_ads(bot: Bot):
         for ad in ads:
             try:
                 photos = json.loads(ad["photos"])
-                closed_caption = (
-                    "🚫 <s>ОБЪЯВЛЕНИЕ ЗАКРЫТО</s>\n\n"
-                    + build_ad_text(ad["title"], ad["description"], ad["address"])
-                )
-                # Редактируем подпись к первому фото в канале
                 await bot.edit_message_caption(
                     chat_id=CHANNEL_ID,
                     message_id=ad["channel_msg_id"],
-                    caption=closed_caption,
+                    caption=build_closed_caption(ad["title"], ad["description"], ad["address"]),
                     parse_mode="HTML"
                 )
                 async with aiosqlite.connect(DB_PATH) as db:
@@ -665,7 +653,5 @@ async def main():
     logger.info("Бот запущен.")
     await dp.start_polling(bot)
  
-if __name__ == "__main__":
-    asyncio.run(main())
 if __name__ == "__main__":
     asyncio.run(main())
