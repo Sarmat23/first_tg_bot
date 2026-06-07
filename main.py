@@ -25,10 +25,7 @@ import aiosqlite
 
 # ─── Настройки ────────────────────────────────────────────────────────────────
 
-BOT_TOKEN = "ВСТАВЬТЕ_ТОКЕН_БОТА_СЮДА"
-GEMINI_API_KEY = "ВСТАВЬТЕ_GEMINI_API_KEY_СЮДА"
-CHANNEL_ID = "@darom_teikovo"          # username или -100xxxxxxxxxx
-MODERATOR_ID = 123456789               # Telegram ID модератора (число)
+
 DB_PATH = "darom.db"
 AD_LIFETIME_DAYS = 30                  # через сколько дней зачёркивать объявление
 
