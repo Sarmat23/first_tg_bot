@@ -24,8 +24,11 @@ import google.generativeai as genai
 import aiosqlite
 
 # ─── Настройки ────────────────────────────────────────────────────────────────
+BOT_TOKEN = "8045514027:AAGhkexJ5AjQcIm95qDA1TQLIkYSd_vS-4s"
 
-
+CHANNEL_ID = 1003793572072          # username или -100xxxxxxxxxx
+MODERATOR_ID = 310342334               # Telegram ID модератора (число)
+GEMINI_API_KEY = "AQ.Ab8RN6Kn3R2Aw3cbScA1R_2JdFAcekZ-yhyj7-IbVU7PAXRJtw"
 DB_PATH = "darom.db"
 AD_LIFETIME_DAYS = 30                  # через сколько дней зачёркивать объявление
 
