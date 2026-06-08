@@ -415,8 +415,7 @@ async def approve_ad(callback: CallbackQuery, bot: Bot):
         if len(photos) == 1:
             msg = await bot.send_photo(
                 CHANNEL_ID, photos[0],
-                caption=channel_text, parse_mode="HTML",
-                reply_markup=channel_post_keyboard()
+                caption=channel_text, parse_mode="HTML"
             )
             channel_msg_id = msg.message_id
         else:
@@ -424,12 +423,6 @@ async def approve_ad(callback: CallbackQuery, bot: Bot):
             media[0] = InputMediaPhoto(media=photos[0], caption=channel_text, parse_mode="HTML")
             msgs = await bot.send_media_group(CHANNEL_ID, media)
             channel_msg_id = msgs[0].message_id
-            # Кнопки отдельным сообщением под альбомом
-            await bot.send_message(
-                CHANNEL_ID,
-                "👇",
-                reply_markup=channel_post_keyboard()
-            )
  
         await update_ad_status(ad_id, "approved", channel_msg_id)
  
@@ -611,7 +604,9 @@ def build_ad_text(title: str, description: str, address: str) -> str:
         f"📦 <b>{title}</b>\n\n"
         f"📝 {description}\n\n"
         f"📍 <b>Адрес:</b> {address}\n\n"
-        f"💬 Пишите в комментариях, если хотите забрать!"
+        f"💬 Пишите в комментариях, если хотите забрать!\n\n"
+        f"📢 <a href='{CHANNEL_URL}'>Подписаться на Даром Тейково</a>\n"
+        f"🎁 <a href='https://t.me/{BOT_USERNAME}'>Отдать вещь даром</a>"
     )
  
 def strikethrough(text: str) -> str:
