@@ -33,7 +33,9 @@ GEMINI_API_KEY = "AIzaSyAZpG9ioi1Iw-27p1--h3U-sD4_XBQ10rQ"
 DB_PATH = "darom.db"
 AD_LIFETIME_DAYS = 30                  # через сколько дней зачёркивать объявление
 
-
+CHANNEL_URL = "https://t.me/darom_tkv"         # ссылка на канал для подписки
+BOT_USERNAME = "ps_darom_teykovo_bot"           # username бота без @
+ 
 # ─── Логирование ──────────────────────────────────────────────────────────────
  
 logging.basicConfig(
@@ -194,6 +196,14 @@ def confirm_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="✅ Отправить на модерацию", callback_data="confirm_ad")],
         [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_ad")],
     ])
+ 
+def channel_post_keyboard() -> InlineKeyboardMarkup:
+    """Кнопки под каждым объявлением в канале."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📢 Подписаться на Даром Тейково", url=CHANNEL_URL),
+    ], [
+        InlineKeyboardButton(text="🎁 Отдать вещь даром", url=f"https://t.me/{BOT_USERNAME}"),
+    ]])
  
 def moderation_keyboard(ad_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
@@ -405,7 +415,8 @@ async def approve_ad(callback: CallbackQuery, bot: Bot):
         if len(photos) == 1:
             msg = await bot.send_photo(
                 CHANNEL_ID, photos[0],
-                caption=channel_text, parse_mode="HTML"
+                caption=channel_text, parse_mode="HTML",
+                reply_markup=channel_post_keyboard()
             )
             channel_msg_id = msg.message_id
         else:
@@ -413,6 +424,12 @@ async def approve_ad(callback: CallbackQuery, bot: Bot):
             media[0] = InputMediaPhoto(media=photos[0], caption=channel_text, parse_mode="HTML")
             msgs = await bot.send_media_group(CHANNEL_ID, media)
             channel_msg_id = msgs[0].message_id
+            # Кнопки отдельным сообщением под альбомом
+            await bot.send_message(
+                CHANNEL_ID,
+                "👇",
+                reply_markup=channel_post_keyboard()
+            )
  
         await update_ad_status(ad_id, "approved", channel_msg_id)
  
