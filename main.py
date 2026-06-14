@@ -32,7 +32,6 @@ MODERATOR_ID = 310342334               # Telegram ID модератора (чи�
 GEMINI_API_KEY = "AIzaSyAZpG9ioi1Iw-27p1--h3U-sD4_XBQ10rQ"
 DB_PATH = "darom.db"
 AD_LIFETIME_DAYS = 30                  # через сколько дней зачёркивать объявление
-
 CHANNEL_URL = "https://t.me/darom_tkv"         # ссылка на канал для подписки
 BOT_USERNAME = "ps_darom_teykovo_bot"           # username бота без @
  
@@ -258,9 +257,8 @@ async def get_title(message: Message, state: FSMContext):
     await state.update_data(title=message.text.strip(), photos=[])
     await state.set_state(AdForm.photos)
     await message.answer(
-        "📸 <b>Шаг 2 из 4</b>\n\n"
-        "Отправьте <b>фото</b> вещи (можно несколько, до 5 штук).\n"
-        "Когда закончите — отправьте <b>/done</b>",
+        "📸 <b>Шаг 2 из 4</b>\n\nОтправьте <b>фото</b> вещи (до 5 штук).\n"
+        "Когда закончите — нажмите кнопку «✅ Готово».",
         parse_mode="HTML"
     )
  
@@ -277,20 +275,29 @@ async def get_photo(message: Message, state: FSMContext):
     file_id = message.photo[-1].file_id
     photos.append(file_id)
     await state.update_data(photos=photos)
-    await message.answer(f"✅ Фото {len(photos)}/5 добавлено. Ещё или /done:")
+    photo_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📷 Добавить ещё фото", callback_data="more_photos")],
+        [InlineKeyboardButton(text="✅ Готово", callback_data="photos_done")],
+    ])
+    await message.answer(f"✅ Фото {len(photos)}/5 добавлено.", reply_markup=photo_keyboard)
  
-@router.message(AdForm.photos, Command("done"))
-async def photos_done(message: Message, state: FSMContext):
+@router.callback_query(AdForm.photos, F.data == "photos_done")
+async def photos_done_cb(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     if not data.get("photos"):
-        await message.answer("Добавьте хотя бы одно фото!")
+        await callback.answer("Добавьте хотя бы одно фото!", show_alert=True)
         return
     await state.set_state(AdForm.description)
-    await message.answer(
+    await callback.message.answer(
         "📋 <b>Шаг 3 из 4</b>\n\nНапишите <b>описание</b> вещи "
         "(состояние, особенности, размер и т.д.):",
         parse_mode="HTML"
     )
+    await callback.answer()
+ 
+@router.callback_query(AdForm.photos, F.data == "more_photos")
+async def more_photos_cb(callback: CallbackQuery):
+    await callback.answer("Отправьте следующее фото 📷")
  
 # ─── Описание ─────────────────────────────────────────────────────────────────
  
@@ -426,11 +433,17 @@ async def approve_ad(callback: CallbackQuery, bot: Bot):
  
         await update_ad_status(ad_id, "approved", channel_msg_id)
  
-        # Уведомляем автора
+        # Уведомляем автора со ссылкой на пост
+        post_url = f"https://t.me/{CHANNEL_ID.lstrip('@')}/{channel_msg_id}"
         await bot.send_message(
             ad["user_id"],
             f"🎉 Ваше объявление <b>«{ad['title']}»</b> опубликовано в канале!",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="👉 Посмотреть объявление", url=post_url)
+            ], [
+                InlineKeyboardButton(text="➕ Создать ещё одно", callback_data="new_ad")
+            ]])
         )
  
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -588,12 +601,20 @@ async def on_comment(message: Message, bot: Bot):
     commenter_name = f"@{commenter.username}" if commenter.username else commenter.full_name
  
     try:
+        post_url = f"https://t.me/{CHANNEL_ID.lstrip('@')}/{ad['channel_msg_id']}"
+        comment_text = message.text or "[медиафайл]"
         notify_text = (
-            f"💬 <b>Новый комментарий</b> к вашему объявлению «{ad['title']}»\n\n"
-            f"👤 {commenter_name}:\n"
-            f"{message.text or '[медиафайл]'}"
+            f"💬 <b>Новый комментарий</b> к вашему объявлению «{ad['title']}»:\n"
+            f'"{comment_text}"'
         )
-        await bot.send_message(ad["user_id"], notify_text, parse_mode="HTML")
+        await bot.send_message(
+            ad["user_id"],
+            notify_text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="👉 Открыть объявление", url=post_url)
+            ]])
+        )
     except Exception as e:
         logger.warning(f"Не удалось уведомить автора объявления #{ad['id']}: {e}")
  
@@ -667,3 +688,4 @@ async def main():
  
 if __name__ == "__main__":
     asyncio.run(main())
+ 
