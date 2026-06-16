@@ -26,7 +26,7 @@ import aiosqlite
 
 
 def _clean(value: str | None) -> str | None:
-"""Убирает случайные кавычки вокруг значения переменной."""
+    """Убирает случайные кавычки вокруг значения переменной."""
     if value is None:
         return None
     return value.strip().strip('"').strip("'")
