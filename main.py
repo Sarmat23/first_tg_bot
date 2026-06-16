@@ -23,7 +23,13 @@ from aiogram.types import (
 from aiogram.exceptions import TelegramBadRequest
 import google.generativeai as genai
 import aiosqlite
- 
+
+
+def _clean(value: str | None) -> str | None:
+"""Убирает случайные кавычки вокруг значения переменной."""
+    if value is None:
+        return None
+    return value.strip().strip('"').strip("'")
 # ─── Настройки ────────────────────────────────────────────────────────────────
 
 
