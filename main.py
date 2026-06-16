@@ -25,11 +25,11 @@ import aiosqlite
  
 
 # ─── Настройки ────────────────────────────────────────────────────────────────
-BOT_TOKEN = "8045514027:AAGhkexJ5AjQcIm95qDA1TQLIkYSd_vS-4s"
+#BOT_TOKEN = "8045514027:AAGhkexJ5AjQcIm95qDA1TQLIkYSd_vS-4s"
 
-CHANNEL_ID = "@darom_tkv"          # username или -100xxxxxxxxxx @darom_tkv
-MODERATOR_ID = 310342334               # Telegram ID модератора (число)
-GEMINI_API_KEY = "AIzaSyAZpG9ioi1Iw-27p1--h3U-sD4_XBQ10rQ"
+#CHANNEL_ID = "@darom_tkv"          # username или -100xxxxxxxxxx @darom_tkv
+#MODERATOR_ID = 310342334               # Telegram ID модератора (число)
+#GEMINI_API_KEY = "AIzaSyAZpG9ioi1Iw-27p1--h3U-sD4_XBQ10rQ"
 DB_PATH = "darom.db"
 AD_LIFETIME_DAYS = 30                  # через сколько дней зачёркивать объявление
 CHANNEL_URL = "https://t.me/darom_tkv"         # ссылка на канал для подписки
