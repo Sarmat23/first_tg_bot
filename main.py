@@ -1,3 +1,4 @@
+Y
 """
 Бот "Даром Тейково" — бесплатные объявления о вещах
 Размещение на bothost.ru
@@ -23,7 +24,6 @@ from aiogram.exceptions import TelegramBadRequest
 import google.generativeai as genai
 import aiosqlite
  
-
 # ─── Настройки ────────────────────────────────────────────────────────────────
 
 
