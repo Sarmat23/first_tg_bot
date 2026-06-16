@@ -25,6 +25,12 @@ import aiosqlite
  
 
 # ─── Настройки ────────────────────────────────────────────────────────────────
+
+
+BOT_TOKEN      = _clean(os.getenv("TOKEN"))
+GEMINI_API_KEY = _clean(os.getenv("GEMINI_API_KEY"))
+CHANNEL_ID     = _clean(os.getenv("CHANNEL_ID"))          # например "@darom_tkv"
+MODERATOR_ID   = int(_clean(os.getenv("MODERATOR_ID", "0")))
 #BOT_TOKEN = "8045514027:AAGhkexJ5AjQcIm95qDA1TQLIkYSd_vS-4s"
 
 #CHANNEL_ID = "@darom_tkv"          # username или -100xxxxxxxxxx @darom_tkv
