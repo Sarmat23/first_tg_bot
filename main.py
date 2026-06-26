@@ -4,8 +4,11 @@
 """
 
 import os
+import sys
 import asyncio
 import logging
+import platform
+import signal
 import aiosqlite
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -38,8 +41,9 @@ log = logging.getLogger(__name__)
 TOKEN         = os.getenv("TOKEN", "")
 CHANNEL_ID    = os.getenv("CHANNEL_ID", "").strip().strip("'\"")
 MODERATOR_ID  = int(os.getenv("MODERATOR_ID", "0"))
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-DATA_DIR      = os.getenv("DATA_DIR", "./data")
+GEMINI_API_KEY     = os.getenv("GEMINI_API_KEY", "")
+DISCUSSION_GROUP_ID = int(os.getenv("DISCUSSION_GROUP_ID", "0"))  # ID группы обсуждений канала
+DATA_DIR           = os.getenv("DATA_DIR", "./data")
 
 if not TOKEN:
     raise ValueError("TOKEN не задан в .env")
@@ -57,6 +61,10 @@ if GEMINI_API_KEY:
 router = Router()
 
 # ─── FSM ─────────────────────────────────────────────────────────────────────
+
+class AdminSearch(StatesGroup):
+    query    = State()
+    wait_id  = State()   # ожидание ID для удаления из канала
 
 class AdForm(StatesGroup):
     title       = State()   # название/что отдаёте
@@ -207,6 +215,97 @@ async def get_ads_to_close(days: int = 30) -> list[int]:
         rows = await cur.fetchall()
         return [r[0] for r in rows]
 
+
+
+async def get_stats() -> dict:
+    """Сводная статистика по базе данных."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        stats = {}
+        for status in ("pending", "approved", "rejected", "closed"):
+            cur = await db.execute("SELECT COUNT(*) FROM ads WHERE status=?", (status,))
+            row = await cur.fetchone()
+            stats[status] = row[0]
+        cur = await db.execute("SELECT COUNT(*) FROM ads")
+        row = await cur.fetchone()
+        stats["total"] = row[0]
+        cur = await db.execute("SELECT COUNT(DISTINCT user_id) FROM ads")
+        row = await cur.fetchone()
+        stats["users"] = row[0]
+        return stats
+
+
+async def get_recent_ads(limit: int = 10, status: str | None = None) -> list[dict]:
+    """Последние объявления (опционально — фильтр по статусу)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if status:
+            cur = await db.execute(
+                "SELECT * FROM ads WHERE status=? ORDER BY created_at DESC LIMIT ?",
+                (status, limit),
+            )
+        else:
+            cur = await db.execute(
+                "SELECT * FROM ads ORDER BY created_at DESC LIMIT ?", (limit,)
+            )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def search_ads(query: str) -> list[dict]:
+    """Полнотекстовый поиск по title и description."""
+    q = f"%{query}%"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM ads WHERE title LIKE ? OR description LIKE ? ORDER BY created_at DESC LIMIT 20",
+            (q, q),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def delete_ad_hard(ad_id: int):
+    """Полное удаление объявления и его фото из БД."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM ad_photos WHERE ad_id=?", (ad_id,))
+        await db.execute("DELETE FROM ad_comments WHERE ad_id=?", (ad_id,))
+        await db.execute("DELETE FROM ads WHERE id=?", (ad_id,))
+        await db.commit()
+
+
+async def get_ad_by_channel_msg(channel_msg_id: int) -> dict | None:
+    """Ищет объявление по ID сообщения в канале."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM ads WHERE channel_msg_id = ?", (channel_msg_id,)
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def save_comment(
+    ad_id: int,
+    tg_message_id: int,
+    user_id: int | None,
+    username: str | None,
+    full_name: str | None,
+    text: str | None,
+    media_type: str | None,
+    media_file_id: str | None,
+):
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO ad_comments
+               (ad_id, tg_message_id, user_id, username, full_name,
+                text, media_type, media_file_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (ad_id, tg_message_id, user_id, username, full_name,
+             text, media_type, media_file_id, now),
+        )
+        await db.commit()
+
 # ─── Gemini модерация ─────────────────────────────────────────────────────────
 
 GEMINI_SYSTEM = """Ты — модератор доски объявлений «Даром».
@@ -271,6 +370,42 @@ def kb_main_menu() -> ReplyKeyboardMarkup:
         resize_keyboard=True,
         is_persistent=True,   # не скрывается после нажатия
     )
+
+
+def kb_admin() -> ReplyKeyboardMarkup:
+    """Постоянная клавиатура администратора."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="📋 Объявления")],
+            [KeyboardButton(text="⏳ На модерации"), KeyboardButton(text="🔍 Поиск")],
+            [KeyboardButton(text="📡 Статус канала"), KeyboardButton(text="🔧 Диагностика")],
+            [KeyboardButton(text="👥 Главное меню")],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+def kb_admin_ads_filter() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Все",       callback_data="adlist:all"),
+            InlineKeyboardButton(text="✅ Одобрены", callback_data="adlist:approved"),
+        ],
+        [
+            InlineKeyboardButton(text="❌ Отклонены", callback_data="adlist:rejected"),
+            InlineKeyboardButton(text="🔒 Закрыты",   callback_data="adlist:closed"),
+        ],
+    ])
+
+
+def kb_ad_admin_actions(ad_id: int, has_channel_msg: bool) -> InlineKeyboardMarkup:
+    buttons = []
+    if has_channel_msg:
+        buttons.append(InlineKeyboardButton(text="🗑 Удалить из канала", callback_data=f"adm:delch:{ad_id}"))
+    buttons.append(InlineKeyboardButton(text="💣 Удалить из БД", callback_data=f"adm:deldb:{ad_id}"))
+    buttons.append(InlineKeyboardButton(text="🔒 Закрыть", callback_data=f"close:{ad_id}"))
+    return InlineKeyboardMarkup(inline_keyboard=[[b] for b in buttons])
 
 def kb_cancel() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
@@ -375,6 +510,14 @@ async def send_ad_to_channel(bot: Bot, ad: dict, photos: list[str]) -> int | Non
         )
         return None
 
+
+async def notify_admin(bot: Bot, text: str):
+    """Отправляет служебное уведомление администратору."""
+    try:
+        await bot.send_message(chat_id=MODERATOR_ID, text=text, parse_mode="HTML")
+    except Exception as e:
+        log.warning("notify_admin failed: %s", e)
+
 # ─── Хендлеры: общие ─────────────────────────────────────────────────────────
 
 @router.message(Command("start"))
@@ -442,35 +585,258 @@ async def btn_help(message: Message):
     )
 
 
-@router.message(Command("debug"))
-async def debug_cmd(message: Message, bot: Bot):
-    """Диагностика для модератора: проверяет канал и Gemini."""
-    if message.from_user.id != MODERATOR_ID:
+# ─── Админ-панель ────────────────────────────────────────────────────────────
+
+def is_admin(message: Message) -> bool:
+    return message.from_user.id == MODERATOR_ID
+
+
+@router.message(Command("admin"))
+@router.message(F.text == "👥 Главное меню")
+async def admin_panel(message: Message, state: FSMContext):
+    if not is_admin(message):
+        await message.answer("⛔ Нет доступа.")
+        return
+    await state.clear()
+    await message.answer(
+        "🛠 <b>Панель администратора</b>\n\nВыберите действие:",
+        parse_mode="HTML",
+        reply_markup=kb_admin(),
+    )
+
+
+@router.message(F.text == "📊 Статистика")
+async def admin_stats(message: Message, bot: Bot):
+    if not is_admin(message):
+        return
+    stats = await get_stats()
+    try:
+        chat = await bot.get_chat(CHANNEL_ID)
+        channel_name = chat.title
+        # подписчики доступны только для каналов
+        member_count = await bot.get_chat_member_count(CHANNEL_ID)
+    except Exception as e:
+        channel_name = f"ошибка: {e}"
+        member_count = "—"
+
+    text = (
+        f"📊 <b>Статистика бота</b>\n\n"
+        f"📦 Всего объявлений: <b>{stats['total']}</b>\n"
+        f"⏳ На модерации:     <b>{stats['pending']}</b>\n"
+        f"✅ Опубликовано:     <b>{stats['approved']}</b>\n"
+        f"❌ Отклонено:        <b>{stats['rejected']}</b>\n"
+        f"🔒 Закрыто:          <b>{stats['closed']}</b>\n\n"
+        f"👥 Уникальных пользователей: <b>{stats['users']}</b>\n\n"
+        f"📡 Канал: <b>{channel_name}</b>\n"
+        f"👁 Подписчиков: <b>{member_count}</b>\n"
+        f"🕐 Время сервера: <code>{datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC</code>"
+    )
+    await message.answer(text, parse_mode="HTML")
+
+
+@router.message(F.text == "📡 Статус канала")
+async def admin_channel_status(message: Message, bot: Bot):
+    if not is_admin(message):
+        return
+    try:
+        chat = await bot.get_chat(CHANNEL_ID)
+        me = await bot.get_me()
+        member = await bot.get_chat_member(CHANNEL_ID, me.id)
+        can_post    = getattr(member, "can_post_messages", "—")
+        can_delete  = getattr(member, "can_delete_messages", "—")
+        can_edit    = getattr(member, "can_edit_messages", "—")
+        member_count = await bot.get_chat_member_count(CHANNEL_ID)
+        text = (
+            f"📡 <b>Состояние канала</b>\n\n"
+            f"Название: <b>{chat.title}</b>\n"
+            f"ID: <code>{chat.id}</code>\n"
+            f"Тип: {chat.type}\n"
+            f"Подписчиков: <b>{member_count}</b>\n\n"
+            f"<b>Права бота:</b>\n"
+            f"  Постить:  {'✅' if can_post else '❌'}\n"
+            f"  Удалять:  {'✅' if can_delete else '❌'}\n"
+            f"  Редактировать: {'✅' if can_edit else '❌'}"
+        )
+    except Exception as e:
+        text = f"❌ Не удалось получить данные канала:\n<code>{e}</code>"
+    await message.answer(text, parse_mode="HTML")
+
+
+@router.message(F.text == "📋 Объявления")
+async def admin_ads_list(message: Message):
+    if not is_admin(message):
+        return
+    await message.answer(
+        "Выберите фильтр:",
+        reply_markup=kb_admin_ads_filter(),
+    )
+
+
+@router.callback_query(F.data.startswith("adlist:"))
+async def admin_ads_filter_cb(callback: CallbackQuery, bot: Bot):
+    if callback.from_user.id != MODERATOR_ID:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    status_map = {"all": None, "approved": "approved", "rejected": "rejected", "closed": "closed"}
+    key = callback.data.split(":")[1]
+    status = status_map.get(key)
+    ads = await get_recent_ads(limit=10, status=status)
+    if not ads:
+        await callback.message.answer("Объявлений не найдено.")
+        await callback.answer()
+        return
+    label = {"all": "Последние 10", "approved": "✅ Опубликованные",
+             "rejected": "❌ Отклонённые", "closed": "🔒 Закрытые"}.get(key, "")
+    await callback.message.answer(f"<b>{label} объявления:</b>", parse_mode="HTML")
+    for ad in ads:
+        status_label = STATUS_LABELS.get(ad["status"], ad["status"])
+        text = (
+            f"<b>#{ad['id']}</b> | {status_label}\n"
+            f"📦 {ad['title']}\n"
+            f"👤 @{ad['username'] or '—'} | {ad['full_name'] or '—'}\n"
+            f"📍 {ad['address']}\n"
+            f"🕐 {ad['created_at'][:16]}"
+        )
+        has_ch = bool(ad.get("channel_msg_id"))
+        await callback.message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=kb_ad_admin_actions(ad["id"], has_ch),
+        )
+    await callback.answer()
+
+
+@router.message(F.text == "⏳ На модерации")
+async def admin_pending(message: Message):
+    if not is_admin(message):
+        return
+    ads = await get_recent_ads(limit=20, status="pending")
+    if not ads:
+        await message.answer("Нет объявлений на модерации. 🎉")
+        return
+    await message.answer(f"<b>На модерации: {len(ads)} шт.</b>", parse_mode="HTML")
+    for ad in ads:
+        text = (
+            f"<b>#{ad['id']}</b> — {ad['title']}\n"
+            f"👤 @{ad['username'] or '—'}\n"
+            f"📝 {ad['description'][:200]}\n"
+            f"📍 {ad['address']}"
+        )
+        await message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=kb_moderation(ad["id"]),
+        )
+
+
+@router.message(F.text == "🔍 Поиск")
+async def admin_search_start(message: Message, state: FSMContext):
+    if not is_admin(message):
+        return
+    await state.set_state(AdminSearch.query)
+    await message.answer(
+        "🔍 Введите поисковый запрос (по названию или описанию):",
+        reply_markup=kb_cancel(),
+    )
+
+
+@router.message(AdminSearch.query)
+async def admin_search_query(message: Message, state: FSMContext):
+    query = message.text.strip() if message.text else ""
+    if not query:
+        return
+    await state.clear()
+    ads = await search_ads(query)
+    if not ads:
+        await message.answer("Ничего не найдено.", reply_markup=kb_admin())
+        return
+    await message.answer(f"<b>Найдено: {len(ads)}</b>", parse_mode="HTML", reply_markup=kb_admin())
+    for ad in ads:
+        status_label = STATUS_LABELS.get(ad["status"], ad["status"])
+        text = (
+            f"<b>#{ad['id']}</b> | {status_label}\n"
+            f"📦 {ad['title']}\n"
+            f"👤 @{ad['username'] or '—'}\n"
+            f"📍 {ad['address']}\n"
+            f"🕐 {ad['created_at'][:16]}"
+        )
+        has_ch = bool(ad.get("channel_msg_id"))
+        await message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=kb_ad_admin_actions(ad["id"], has_ch),
+        )
+
+
+@router.callback_query(F.data.startswith("adm:"))
+async def admin_ad_action(callback: CallbackQuery, bot: Bot):
+    if callback.from_user.id != MODERATOR_ID:
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    action  = parts[1]
+    ad_id   = int(parts[2])
+    ad = await get_ad(ad_id)
+    if not ad:
+        await callback.answer("Объявление не найдено.", show_alert=True)
         return
 
-    lines = [f"🔧 <b>Диагностика</b>", f"", f"<b>CHANNEL_ID:</b> <code>{CHANNEL_ID}</code>"]
+    if action == "delch":
+        # Удалить сообщение из канала
+        if ad.get("channel_msg_id"):
+            try:
+                await bot.delete_message(chat_id=CHANNEL_ID, message_id=ad["channel_msg_id"])
+                await set_ad_status(ad_id, "closed")
+                await callback.answer("✅ Удалено из канала, статус → закрыто.")
+                await callback.message.edit_reply_markup(reply_markup=None)
+                await callback.message.reply(f"🗑 Объявление #{ad_id} удалено из канала.")
+            except Exception as e:
+                await callback.answer(f"Ошибка: {e}", show_alert=True)
+        else:
+            await callback.answer("Нет сообщения в канале.", show_alert=True)
 
-    # Проверяем доступ к каналу
+    elif action == "deldb":
+        # Полное удаление из БД
+        channel_msg_id = ad.get("channel_msg_id")
+        if channel_msg_id:
+            try:
+                await bot.delete_message(chat_id=CHANNEL_ID, message_id=channel_msg_id)
+            except Exception:
+                pass
+        await delete_ad_hard(ad_id)
+        await callback.answer("💣 Полностью удалено из БД.")
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.reply(f"💣 Объявление #{ad_id} удалено из БД.")
+
+
+@router.message(Command("debug"))
+@router.message(F.text == "🔧 Диагностика")
+async def debug_cmd(message: Message, bot: Bot):
+    """Диагностика для администратора."""
+    if not is_admin(message):
+        return
+    lines = [
+        "🔧 <b>Диагностика</b>", "",
+        f"<b>CHANNEL_ID:</b> <code>{CHANNEL_ID}</code>",
+        f"<b>Python:</b> {sys.version.split()[0]}",
+        f"<b>Платформа:</b> {platform.system()} {platform.release()}",
+        f"<b>БД:</b> <code>{DB_PATH}</code>",
+        f"<b>Размер БД:</b> {os.path.getsize(DB_PATH) // 1024} КБ" if os.path.exists(DB_PATH) else "БД не найдена",
+        "",
+    ]
     try:
         chat = await bot.get_chat(CHANNEL_ID)
         me = await bot.get_me()
         member = await bot.get_chat_member(CHANNEL_ID, me.id)
         can_post = getattr(member, "can_post_messages", None)
-        lines.append(f"✅ Канал: <b>{chat.title}</b>")
-        lines.append(f"   Тип: {chat.type}")
-        lines.append(f"   Бот может постить: {can_post}")
+        lines.append(f"✅ Канал: <b>{chat.title}</b>  (постить: {'да' if can_post else 'нет'})")
     except Exception as e:
-        lines.append(f"❌ Канал недоступен: <code>{type(e).__name__}: {e}</code>")
-
-    # Проверяем Gemini
+        lines.append(f"❌ Канал: <code>{type(e).__name__}: {e}</code>")
     if GEMINI_API_KEY:
-        ok, reason = await gemini_check("тест", "тестовое объявление", "центр города")
-        lines.append(f"")
-        lines.append(f"✅ Gemini: работает (ok={ok})")
+        ok, reason = await gemini_check("тест", "тест", "тест")
+        lines.append(f"{'✅' if ok else '⚠️'} Gemini: {'работает' if ok else reason}")
     else:
-        lines.append(f"")
-        lines.append(f"⚠️ Gemini: ключ не задан")
-
+        lines.append("⚠️ Gemini: ключ не задан")
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 # ─── FSM: подача объявления ───────────────────────────────────────────────────
@@ -727,6 +1093,119 @@ async def close_ad_callback(callback: CallbackQuery, bot: Bot):
     await callback.answer("🔒 Объявление закрыто.")
     await callback.message.reply("🔒 Объявление закрыто. Спасибо!")
 
+
+# ─── Комментарии из группы обсуждений ────────────────────────────────────────
+
+@router.message(F.chat.id == DISCUSSION_GROUP_ID)
+async def handle_discussion_comment(message: Message, bot: Bot):
+    """
+    Слушает группу обсуждений канала.
+    Каждое сообщение — потенциальный комментарий к объявлению.
+    message.reply_to_message.forward_from_message_id — ID поста в канале.
+    """
+    if not DISCUSSION_GROUP_ID:
+        return
+
+    # Telegram пересылает исходный пост канала как reply_to_message
+    reply = message.reply_to_message
+    if not reply:
+        return  # не ответ на пост — игнорируем
+
+    # ID поста в канале берём из forward_origin или sender_chat
+    channel_msg_id = None
+
+    # aiogram 3.x: reply_to_message.forward_from_message_id для постов канала
+    if reply.forward_from_message_id:
+        channel_msg_id = reply.forward_from_message_id
+    elif reply.message_id:
+        # fallback: в некоторых конфигурациях ID совпадает
+        channel_msg_id = reply.message_id
+
+    if not channel_msg_id:
+        return
+
+    ad = await get_ad_by_channel_msg(channel_msg_id)
+    if not ad:
+        return  # пост не связан с объявлением
+
+    # Пропускаем авто-пересылку самого поста из канала
+    sender = message.from_user
+    if message.sender_chat and message.sender_chat.id == int(CHANNEL_ID.replace("@", "") if "@" in CHANNEL_ID else CHANNEL_ID):
+        return
+
+    # Определяем медиа
+    media_type = None
+    media_file_id = None
+    if message.photo:
+        media_type = "photo"
+        media_file_id = message.photo[-1].file_id
+    elif message.video:
+        media_type = "video"
+        media_file_id = message.video.file_id
+    elif message.document:
+        media_type = "document"
+        media_file_id = message.document.file_id
+    elif message.sticker:
+        media_type = "sticker"
+        media_file_id = message.sticker.file_id
+
+    comment_text = message.text or message.caption or ""
+
+    # Сохраняем в БД
+    await save_comment(
+        ad_id=ad["id"],
+        tg_message_id=message.message_id,
+        user_id=sender.id if sender else None,
+        username=sender.username if sender else None,
+        full_name=sender.full_name if sender else None,
+        text=comment_text,
+        media_type=media_type,
+        media_file_id=media_file_id,
+    )
+
+    # Не уведомляем автора о его же комментарии
+    if sender and sender.id == ad["user_id"]:
+        return
+
+    # Формируем превью текста комментария
+    preview = comment_text[:200] if comment_text else f"[{media_type or 'сообщение'}]"
+    commenter = f"@{sender.username}" if (sender and sender.username) else (sender.full_name if sender else "Аноним")
+
+    notify_text = (
+        f"💬 <b>Новый комментарий к вашему объявлению</b>\n\n"
+        f"📦 «{ad['title']}»\n\n"
+        f"👤 {commenter}:\n"
+        f"{preview}"
+    )
+
+    # Пересылаем медиа если есть
+    try:
+        if media_type == "photo":
+            await bot.send_photo(
+                chat_id=ad["user_id"],
+                photo=media_file_id,
+                caption=notify_text,
+                parse_mode="HTML",
+            )
+        elif media_type == "video":
+            await bot.send_video(
+                chat_id=ad["user_id"],
+                video=media_file_id,
+                caption=notify_text,
+                parse_mode="HTML",
+            )
+        elif media_type in ("document", "sticker"):
+            await bot.send_message(chat_id=ad["user_id"], text=notify_text, parse_mode="HTML")
+            await bot.send_document(chat_id=ad["user_id"], document=media_file_id)
+        else:
+            await bot.send_message(chat_id=ad["user_id"], text=notify_text, parse_mode="HTML")
+        log.info(
+            "Уведомление о комментарии отправлено user_id=%s, ad_id=%s",
+            ad["user_id"], ad["id"],
+        )
+    except Exception as e:
+        log.warning("Не удалось уведомить автора объявления #%s: %s", ad["id"], e)
+
 # ─── Фоновая задача: автозакрытие ─────────────────────────────────────────────
 
 async def close_old_ads(bot: Bot):
@@ -780,12 +1259,28 @@ async def main():
         BotCommand(command="newad",  description="Подать объявление"),
         BotCommand(command="myads",  description="Мои объявления"),
         BotCommand(command="cancel", description="Отменить текущее действие"),
+        BotCommand(command="admin",  description="Панель администратора"),
     ])
 
-    log.info("Бот запущен.")
+    started_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    await notify_admin(
+        bot,
+        f"🟢 <b>Бот запущен</b>\n"
+        f"🕐 {started_at}\n"
+        f"🖥 {platform.system()} {platform.release()}\n"
+        f"🐍 Python {sys.version.split()[0]}\n"
+        f"📡 Канал: <code>{CHANNEL_ID}</code>\n"
+        f"💬 Группа обсуждений: <code>{DISCUSSION_GROUP_ID or 'не задана'}</code>"
+    )
+    log.info("Бот запущен, уведомление отправлено администратору.")
     try:
         await dp.start_polling(bot)
+    except Exception as e:
+        await notify_admin(bot, f"💥 <b>Бот упал с ошибкой:</b>\n<code>{e}</code>")
+        raise
     finally:
+        stopped_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        await notify_admin(bot, f"🔴 <b>Бот остановлен</b>\n🕐 {stopped_at}")
         task.cancel()
         await bot.session.close()
 
