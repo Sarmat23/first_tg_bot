@@ -36,7 +36,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 TOKEN         = os.getenv("TOKEN", "")
-CHANNEL_ID    = os.getenv("CHANNEL_ID", "")          # "@mychannel" или "-100..."
+CHANNEL_ID    = os.getenv("CHANNEL_ID", "").strip().strip("'\"")
 MODERATOR_ID  = int(os.getenv("MODERATOR_ID", "0"))
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 DATA_DIR      = os.getenv("DATA_DIR", "./data")
@@ -218,7 +218,7 @@ GEMINI_SYSTEM = """Ты — модератор доски объявлений �
 
 
 # Список моделей Gemini для перебора (актуальные названия на 2025)
-GEMINI_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+GEMINI_MODELS = ["gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash-latest", "gemini-1.5-flash"]
 
 
 async def gemini_check(title: str, description: str, address: str) -> tuple[bool, str]:
