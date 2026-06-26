@@ -17,7 +17,7 @@ from aiogram.types import (
     Message, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton,
     InputMediaPhoto, ReplyKeyboardMarkup, KeyboardButton,
-    ReplyKeyboardRemove,
+    ReplyKeyboardRemove, BotCommand,
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -260,6 +260,18 @@ async def gemini_check(title: str, description: str, address: str) -> tuple[bool
 
 # ─── Клавиатуры ───────────────────────────────────────────────────────────────
 
+
+def kb_main_menu() -> ReplyKeyboardMarkup:
+    """Постоянная клавиатура — всегда видна внизу экрана."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📋 Подать объявление")],
+            [KeyboardButton(text="📂 Мои объявления"), KeyboardButton(text="ℹ️ Помощь")],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,   # не скрывается после нажатия
+    )
+
 def kb_cancel() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="❌ Отмена")]],
@@ -371,10 +383,9 @@ async def start_cmd(message: Message, state: FSMContext):
     await message.answer(
         "🎁 <b>Добро пожаловать в Даром!</b>\n\n"
         "Здесь люди бесплатно отдают ненужные вещи.\n\n"
-        "• /newad — подать объявление\n"
-        "• /myads — мои объявления\n"
-        "• /cancel — отменить текущее действие",
+        "Используйте кнопки меню внизу экрана 👇",
         parse_mode="HTML",
+        reply_markup=kb_main_menu(),
     )
 
 
@@ -384,7 +395,7 @@ async def cancel_cmd(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         "Действие отменено.",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=kb_main_menu(),
     )
 
 
@@ -392,7 +403,10 @@ async def cancel_cmd(message: Message, state: FSMContext):
 async def my_ads(message: Message):
     ads = await get_user_ads(message.from_user.id)
     if not ads:
-        await message.answer("У вас пока нет объявлений. /newad — подать новое.")
+        await message.answer(
+            "У вас пока нет объявлений.",
+            reply_markup=kb_main_menu(),
+        )
         return
 
     text_lines = ["<b>Ваши объявления:</b>\n"]
@@ -400,7 +414,32 @@ async def my_ads(message: Message):
         status = STATUS_LABELS.get(ad["status"], ad["status"])
         text_lines.append(f"• <b>{ad['title']}</b> — {status}")
 
-    await message.answer("\n".join(text_lines), parse_mode="HTML")
+    await message.answer("\n".join(text_lines), parse_mode="HTML", reply_markup=kb_main_menu())
+
+
+@router.message(F.text == "📋 Подать объявление")
+async def btn_new_ad(message: Message, state: FSMContext):
+    await new_ad_start(message, state)
+
+
+@router.message(F.text == "📂 Мои объявления")
+async def btn_my_ads(message: Message):
+    await my_ads(message)
+
+
+@router.message(F.text == "ℹ️ Помощь")
+async def btn_help(message: Message):
+    await message.answer(
+        "📌 <b>Как пользоваться ботом:</b>\n\n"
+        "1. Нажмите <b>📋 Подать объявление</b>\n"
+        "2. Заполните название, фото, описание и адрес\n"
+        "3. Объявление уйдёт на модерацию\n"
+        "4. После одобрения оно появится в канале\n"
+        "5. Когда вещь отдана — закройте объявление кнопкой\n\n"
+        "❓ Вопросы? Пишите модератору.",
+        parse_mode="HTML",
+        reply_markup=kb_main_menu(),
+    )
 
 
 @router.message(Command("debug"))
@@ -568,7 +607,7 @@ async def ad_submit(message: Message, state: FSMContext, bot: Bot):
 
     await message.answer(
         "✅ Объявление отправлено на модерацию!\nМы сообщим о результате.",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=kb_main_menu(),
     )
 
     # Уведомление модератору
@@ -734,6 +773,14 @@ async def main():
     dp.include_router(router)
 
     task = asyncio.create_task(close_old_ads(bot))
+
+    # Команды в меню Telegram (кнопка "/" слева от поля ввода)
+    await bot.set_my_commands([
+        BotCommand(command="start",  description="Главное меню"),
+        BotCommand(command="newad",  description="Подать объявление"),
+        BotCommand(command="myads",  description="Мои объявления"),
+        BotCommand(command="cancel", description="Отменить текущее действие"),
+    ])
 
     log.info("Бот запущен.")
     try:
