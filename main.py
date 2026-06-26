@@ -217,25 +217,46 @@ GEMINI_SYSTEM = """Ты — модератор доски объявлений �
 Ответь строго JSON: {"ok": true/false, "reason": "причина если ok=false, иначе пусто"}"""
 
 
+# Список моделей Gemini для перебора (актуальные названия на 2025)
+GEMINI_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+
+
 async def gemini_check(title: str, description: str, address: str) -> tuple[bool, str]:
     if not GEMINI_API_KEY:
+        log.info("Gemini: ключ не задан, проверка пропущена")
         return True, ""
-    try:
-        model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            system_instruction=GEMINI_SYSTEM,
-        )
-        prompt = f"Название: {title}\nОписание: {description}\nАдрес: {address}"
-        response = await asyncio.to_thread(model.generate_content, prompt)
-        import json, re
-        text = response.text.strip()
-        # убираем markdown-обёртку если есть
-        text = re.sub(r"```(?:json)?|```", "", text).strip()
-        data = json.loads(text)
-        return bool(data.get("ok", True)), data.get("reason", "")
-    except Exception as e:
-        log.warning("Gemini error: %s", e)
-        return True, ""  # при ошибке пропускаем на ручную модерацию
+
+    import json, re
+    prompt = f"Название: {title}\nОписание: {description}\nАдрес: {address}"
+    last_error = None
+
+    for model_name in GEMINI_MODELS:
+        try:
+            log.info("Gemini: пробуем модель %s", model_name)
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=GEMINI_SYSTEM,
+            )
+            response = await asyncio.to_thread(model.generate_content, prompt)
+            text = response.text.strip()
+            log.info("Gemini raw response: %s", text)
+            # убираем markdown-обёртку если есть
+            text = re.sub(r"```(?:json)?|```", "", text).strip()
+            data = json.loads(text)
+            result_ok = bool(data.get("ok", True))
+            reason = data.get("reason", "")
+            log.info("Gemini результат: ok=%s reason=%s", result_ok, reason)
+            return result_ok, reason
+        except json.JSONDecodeError as e:
+            log.warning("Gemini %s: не удалось разобрать JSON: %s | текст: %s", model_name, e, text)
+            return True, ""  # ответ получен, но не JSON — пропускаем
+        except Exception as e:
+            last_error = e
+            log.warning("Gemini %s недоступна: %s", model_name, e)
+            continue
+
+    log.error("Gemini: все модели недоступны. Последняя ошибка: %s", last_error)
+    return True, ""  # при полном сбое — на ручную модерацию
 
 # ─── Клавиатуры ───────────────────────────────────────────────────────────────
 
@@ -310,6 +331,10 @@ async def send_ad_to_channel(bot: Bot, ad: dict, photos: list[str]) -> int | Non
         f"📍 {ad['address']}\n\n"
         f"👤 @{ad['username'] or 'аноним'}"
     )
+    log.info(
+        "send_ad_to_channel: ad_id=%s CHANNEL_ID=%r photos=%d",
+        ad["id"], CHANNEL_ID, len(photos),
+    )
     try:
         if photos:
             media = [
@@ -320,6 +345,7 @@ async def send_ad_to_channel(bot: Bot, ad: dict, photos: list[str]) -> int | Non
                 )
             ] + [InputMediaPhoto(media=fid) for fid in photos[1:5]]
             msgs = await bot.send_media_group(chat_id=CHANNEL_ID, media=media)
+            log.info("send_ad_to_channel: опубликовано с фото, msg_id=%s", msgs[0].message_id)
             return msgs[0].message_id
         else:
             msg = await bot.send_message(
@@ -327,9 +353,14 @@ async def send_ad_to_channel(bot: Bot, ad: dict, photos: list[str]) -> int | Non
                 text=caption,
                 parse_mode="HTML",
             )
+            log.info("send_ad_to_channel: опубликовано без фото, msg_id=%s", msg.message_id)
             return msg.message_id
-    except TelegramBadRequest as e:
-        log.error("send_ad_to_channel error: %s", e)
+    except Exception as e:
+        # Ловим ВСЕ исключения — TelegramForbiddenError, TelegramBadRequest и др.
+        log.error(
+            "send_ad_to_channel ОШИБКА (тип=%s): %s | CHANNEL_ID=%r",
+            type(e).__name__, e, CHANNEL_ID,
+        )
         return None
 
 # ─── Хендлеры: общие ─────────────────────────────────────────────────────────
@@ -370,6 +401,38 @@ async def my_ads(message: Message):
         text_lines.append(f"• <b>{ad['title']}</b> — {status}")
 
     await message.answer("\n".join(text_lines), parse_mode="HTML")
+
+
+@router.message(Command("debug"))
+async def debug_cmd(message: Message, bot: Bot):
+    """Диагностика для модератора: проверяет канал и Gemini."""
+    if message.from_user.id != MODERATOR_ID:
+        return
+
+    lines = [f"🔧 <b>Диагностика</b>", f"", f"<b>CHANNEL_ID:</b> <code>{CHANNEL_ID}</code>"]
+
+    # Проверяем доступ к каналу
+    try:
+        chat = await bot.get_chat(CHANNEL_ID)
+        me = await bot.get_me()
+        member = await bot.get_chat_member(CHANNEL_ID, me.id)
+        can_post = getattr(member, "can_post_messages", None)
+        lines.append(f"✅ Канал: <b>{chat.title}</b>")
+        lines.append(f"   Тип: {chat.type}")
+        lines.append(f"   Бот может постить: {can_post}")
+    except Exception as e:
+        lines.append(f"❌ Канал недоступен: <code>{type(e).__name__}: {e}</code>")
+
+    # Проверяем Gemini
+    if GEMINI_API_KEY:
+        ok, reason = await gemini_check("тест", "тестовое объявление", "центр города")
+        lines.append(f"")
+        lines.append(f"✅ Gemini: работает (ok={ok})")
+    else:
+        lines.append(f"")
+        lines.append(f"⚠️ Gemini: ключ не задан")
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
 # ─── FSM: подача объявления ───────────────────────────────────────────────────
 
